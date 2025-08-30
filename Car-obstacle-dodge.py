@@ -1084,3 +1084,598 @@ def setupCamera():
         gluLookAt(cx, cy, cz,
                   player_x, player_y + 10.0, player_z + 120.0,
                   0, 1, 0)
+
+# -----------------
+# Input System 
+# -----------------
+def keyboardListener(key, x, y):
+    global speed, jumping, vy, cheat, state, selected_vehicle, player_x, lives, first_person_view
+    global menu_selection, garage_selection, current_vehicle, max_speed, selected_color_index
+    global super_jump_timer
+    
+    if state == STATE_MENU:
+        if key == b'1':
+            state = STATE_PLAYING
+            start_game()
+        elif key == b'2':
+            state = STATE_GARAGE
+        elif key == b'3':
+            state = STATE_ACHIEVEMENTS
+        elif key == b'q':
+            exit()
+        return
+
+    elif state == STATE_GARAGE:
+        if key == b'1':
+            if garage_selection < len(unlocked_vehicles):
+                selected_vehicle = unlocked_vehicles[garage_selection]
+                current_vehicle = vehicle_types[selected_vehicle]
+        elif key == b'2':
+            selected_color_index = (selected_color_index + 1) % len(vehicle_colors)
+        elif key == b'b':
+            state = STATE_MENU
+        elif key == b'w':
+            garage_selection = max(0, garage_selection - 1)
+        elif key == b's':
+            garage_selection = min(len(unlocked_vehicles) - 1, garage_selection + 1)
+        return
+
+    elif state == STATE_ACHIEVEMENTS:
+        if key == b'b':
+            state = STATE_MENU
+        return
+
+    elif state == STATE_GAMEOVER:
+        if key == b'r':
+            reset_game()
+            start_game()
+        elif key == b'b':
+            state = STATE_MENU
+        return
+
+    vehicle_handling = current_vehicle["handling"]
+    vehicle_speed_mult = current_vehicle["speed_mult"]
+    
+    if key == b'd':
+        move_amount = 12.0 * vehicle_handling
+        player_x -= move_amount
+        if abs(player_x) > lane_width * 1.2:
+            handle_offroad_collision()
+    elif key == b'a':
+        move_amount = 12.0 * vehicle_handling
+        player_x += move_amount
+        if abs(player_x) > lane_width * 1.2:
+            handle_offroad_collision()
+    elif key == b'w':
+        speed = min(max_speed * vehicle_speed_mult, speed + 0.2)
+        check_achievement("speed_demon")
+    elif key == b's':
+        speed = max(min_speed, speed - 0.2)
+    elif key == b' ':
+        if not jumping:
+            jumping = True
+            if super_jump_timer > 0:
+                vy = jump_impulse * 1.8
+                super_jump_timer = max(0, super_jump_timer - 60)
+            else:
+                vy = jump_impulse 
+    elif key == b'c':
+        cheat = not cheat
+    elif key == b'v':
+        first_person_view = not first_person_view
+    elif key == b'r':
+        reset_game()
+        start_game()
+
+def handle_offroad_collision():
+    global lives, player_x, flash_timer, shake_timer, shake_intensity, slow_timer, pre_slow_speed
+    
+    if invincible_timer > 0:
+        return
+    
+    lives -= 1
+    player_x = max(-lane_width*1.2, min(lane_width*1.2, player_x))
+    trigger_hit_feedback()
+    pre_slow_speed = max(min_speed, speed)
+    globals()['speed'] = max(min_speed, pre_slow_speed * 0.5)
+    slow_timer = 120
+    stats["total_crashes"] += 1
+    if lives <= 0:
+        end_game()
+
+def trigger_hit_feedback():
+    global jumping, vy, player_y, player_x, flash_timer, shake_timer, shake_intensity
+    vy = jump_impulse * 0.6
+    jumping = True
+    
+    if player_x < -lane_width * 0.5:
+        player_x = -lane_width
+    elif player_x > lane_width * 0.5:
+        player_x = lane_width
+    else:
+        player_x = 0.0
+
+    flash_timer = 40
+    shake_timer = 20
+    shake_intensity = min(5.0, speed * 1.5)
+
+def specialKeyListener(key, x, y):
+    global cam_height, cam_yaw, garage_selection
+    
+    if state == STATE_GARAGE:
+        if key == GLUT_KEY_UP:
+            garage_selection = max(0, garage_selection - 1)
+        elif key == GLUT_KEY_DOWN:
+            garage_selection = min(len(unlocked_vehicles) - 1, garage_selection + 1)
+    elif not first_person_view and state == STATE_PLAYING:
+        if key == GLUT_KEY_UP:
+            cam_height = min(420.0, cam_height + 8.0)
+        elif key == GLUT_KEY_DOWN:
+            cam_height = max(120.0, cam_height - 8.0)
+        elif key == GLUT_KEY_LEFT:
+            cam_yaw -= 2.0
+        elif key == GLUT_KEY_RIGHT:
+            cam_yaw += 2.0
+
+def mouseListener(button, state_btn, x, y):
+    pass
+
+# -----------------
+# Game Flow Management
+# -----------------
+def start_game():
+    global current_vehicle, state, lives, player_x, player_y, player_z, vy, jumping, speed, score
+    global spawn_interval, spawn_cooldown, cam_yaw, cam_height, slow_timer, pre_slow_speed
+    global first_person_view, super_jump_timer, speed_boost_timer, invincible_timer, coins
+    global max_speed, obstacles, collectibles, animals, particle_effects, rain_drops, snow_flakes
+    
+    # Reset all game variables to initial state
+    current_vehicle = vehicle_types[selected_vehicle]
+    state = STATE_PLAYING
+    lives = 5  # 
+    player_x = 0.0
+    player_y = 0.0
+    player_z = 0.0
+    vy = 0.0
+    jumping = False
+    speed = base_speed
+    score = 0.0
+    coins = 0
+    obstacles = []
+    collectibles = []
+    animals = []
+    particle_effects = []
+    rain_drops = []
+    snow_flakes = []
+    spawn_interval = 65.0
+    spawn_cooldown = 0.0
+    cam_yaw = 0.0
+    cam_height = 260.0
+    slow_timer = 0
+    pre_slow_speed = None
+    first_person_view = False
+    super_jump_timer = 0
+    speed_boost_timer = 0
+    invincible_timer = 0
+    max_speed = original_max_speed
+    
+    stats["games_played"] += 1
+
+def end_game():
+    global state
+    state = STATE_GAMEOVER
+    
+    if score > stats["best_score"]:
+        stats["best_score"] = int(score)
+    if player_z > stats["best_distance"]:
+        stats["best_distance"] = int(player_z)
+
+def reset_game():
+    global state, player_x, player_y, player_z, vy, jumping, speed, score, lives, obstacles, collectibles
+    global spawn_interval, spawn_cooldown, cam_yaw, cam_height, slow_timer, pre_slow_speed
+    global first_person_view, super_jump_timer, speed_boost_timer, invincible_timer, coins
+    global max_speed, animals, particle_effects, rain_drops, snow_flakes
+    
+    state = STATE_MENU
+    player_x = 0.0
+    player_y = 0.0
+    player_z = 0.0
+    vy = 0.0
+    jumping = False
+    speed = base_speed
+    score = 0.0
+    lives = 5  
+    coins = 0
+    obstacles = []
+    collectibles = []
+    animals = []
+    particle_effects = []
+    rain_drops = []
+    snow_flakes = []
+    spawn_interval = 65.0
+    spawn_cooldown = 0.0
+    cam_yaw = 0.0
+    cam_height = 260.0
+    slow_timer = 0
+    pre_slow_speed = None
+    first_person_view = False
+    super_jump_timer = 0
+    speed_boost_timer = 0
+    invincible_timer = 0
+    max_speed = original_max_speed
+
+# -----------------
+# Auto-pilot 
+# -----------------
+def auto_dodge():
+    global player_x
+    ahead_obstacles = [o for o in obstacles if o["z"] > player_z + 120 and o["z"] < player_z + 520]
+    ahead_animals = [a for a in animals if a["z"] > player_z + 100 and a["z"] < player_z + 400]
+    
+    if not ahead_obstacles and not ahead_animals:
+        return
+    
+    current_lane = min(range(3), key=lambda i: abs(player_x - lanes_x[i]))
+    lane_danger = [0, 0, 0]
+    
+    for o in ahead_obstacles:
+        for i, lx in enumerate(lanes_x):
+            if abs(o["x"] - lx) < 60:
+                lane_danger[i] += 1
+    
+    for a in ahead_animals:
+        for i, lx in enumerate(lanes_x):
+            if abs(a["x"] - lx) < 80:
+                lane_danger[i] += 0.5
+    
+    safest_lane = min(range(3), key=lambda i: lane_danger[i])
+    
+    if lane_danger[current_lane] > 0 and safest_lane != current_lane:
+        target_x = lanes_x[safest_lane]
+        move_speed = 10.0 * current_vehicle["handling"]
+        
+        if abs(player_x - target_x) > 2:
+            player_x += move_speed if target_x > player_x else -move_speed
+        else:
+            player_x = target_x
+
+# -----------------
+# Game Update Loop
+# -----------------
+def update_game(dt):
+    global jumping, vy, player_y, player_z, score, spawn_cooldown, spawn_interval
+    global slow_timer, pre_slow_speed, speed, super_jump_timer, speed_boost_timer, invincible_timer
+    
+    if spawn_interval > min_spawn_interval:
+        spawn_interval -= 0.003
+
+    spawn_cooldown -= 1
+    if spawn_cooldown <= 0:
+        spawn_obstacle()
+        spawn_collectible()
+    
+    spawn_animal()
+
+    if cheat:
+        auto_dodge()
+
+    forward_movement = speed * 420.0 * dt * current_vehicle["speed_mult"]
+    globals()['player_z'] += forward_movement
+    achievement_counters["total_distance"] += forward_movement
+
+    if jumping:
+        player_y += vy
+        vy += gravity
+        if player_y <= 0:
+            player_y = 0
+            jumping = False
+            vy = 0
+
+    update_obstacles(dt)
+    update_collectibles(dt)
+    update_animals(dt)
+    update_particle_effects(dt)
+    update_weather_and_time(dt)
+    
+    check_collisions()
+    check_collectible_collision()
+    check_animal_collision()
+
+    globals()['score'] += speed * 0.8 + current_vehicle["speed_mult"] * 0.2
+
+    if super_jump_timer > 0:
+        super_jump_timer -= 1
+    
+    if speed_boost_timer > 0:
+        speed_boost_timer -= 1
+    else:
+        globals()['max_speed'] = original_max_speed
+    
+    if invincible_timer > 0:
+        invincible_timer -= 1
+
+    if slow_timer > 0:
+        slow_timer -= 1
+        if pre_slow_speed is not None:
+            speed = min(pre_slow_speed, speed + speed_recover_rate * current_vehicle["speed_mult"])
+            globals()['speed'] = speed
+    else:
+        pre_slow_speed = None
+
+    check_achievement("survivor")
+    check_achievement("distance_master")
+
+# -----------------
+# HUD System
+# -----------------
+def draw_enhanced_hud():
+    global life_icon_angle, flash_timer, notification_timer
+    
+    view_mode = "First Person" if first_person_view else "Third Person"
+    vehicle_name = current_vehicle["name"]
+    
+    draw_text(15, 770, f"Score: {int(score)}   Speed: {speed:.1f}   Distance: {int(player_z/10)}m")
+    draw_text(15, 745, f"Vehicle: {vehicle_name}   Coins: {coins}   Lives: {lives}")
+    draw_text(15, 720, f"View: {view_mode}   Weather: {weather_type.title()}")
+
+    y_offset = 695
+    if super_jump_timer > 0:
+        draw_text(15, y_offset, f"Super Jump: {super_jump_timer//60 + 1}s", color=(0.2, 0.8, 1.0))
+        y_offset -= 20
+    
+    if speed_boost_timer > 0:
+        draw_text(15, y_offset, f"Speed Boost: {speed_boost_timer//60 + 1}s", color=(1.0, 0.2, 0.2))
+        y_offset -= 20
+    
+    if invincible_timer > 0:
+        draw_text(15, y_offset, f"Invincible: {invincible_timer//60 + 1}s", color=(1.0, 1.0, 0.0))
+        y_offset -= 20
+
+    if notification_timer > 0:
+        draw_text(300, 400, achievement_notification, color=(0.0, 1.0, 0.0))
+        notification_timer -= 1
+
+    if cheat:
+        draw_text(15, y_offset, "CHEAT MODE ON", color=(1.0, 0.0, 0.0))
+
+    # Simplified 2D life indicators to avoid matrix stack issues
+    draw_simple_life_indicators()
+
+def draw_simple_life_indicators():
+    # Draw hearts for life display
+    for i in range(lives):
+        x_pos = 850 + i * 25
+        y_pos = 770
+        
+        if flash_timer > 0 or invincible_timer > 0:
+            color = (1.0, 1.0, 0.0)  # Yellow when invincible/hit
+        else:
+            color = (1.0, 0.0, 0.0)  # Red hearts
+        
+        draw_text(x_pos, y_pos, "♥", color=color)
+
+# -----------------
+# Menu Systems
+# -----------------
+def draw_main_menu():
+    # Simplified background without complex matrix operations
+    draw_text(250, 730, "3D CAR OBSTACLE DODGE", font=GLUT_BITMAP_TIMES_ROMAN_24)
+    draw_text(400, 690, " EDITION", color=(1.0, 0.5, 0.0))
+    draw_text(350, 620, "1 - Start Game", color=(0.0, 1.0, 0.0))
+    draw_text(350, 590, "2 - Garage/Vehicles", color=(0.0, 0.8, 1.0))
+    draw_text(350, 560, "3 - Achievements", color=(1.0, 0.8, 0.0))
+    draw_text(350, 530, "Q - Quit", color=(1.0, 0.0, 0.0))
+    
+    draw_text(200, 480, "Game Controls:", color=(0.8, 0.8, 0.8))
+    draw_text(50, 450, "A/D - Steer  |  W/S - Speed  |  SPACE - Jump  |  V - First Person  |  C - Cheat")
+
+def draw_garage():
+    draw_text(400, 750, "VEHICLE GARAGE", font=GLUT_BITMAP_TIMES_ROMAN_24)
+    
+    y_pos = 680
+    for i, vehicle_key in enumerate(unlocked_vehicles):
+        vehicle_data = vehicle_types[vehicle_key]
+        color = (1.0, 1.0, 0.0) if i == garage_selection else (1.0, 1.0, 1.0)
+        marker = ">>> " if vehicle_key == selected_vehicle else "    "
+        
+        draw_text(50, y_pos, f"{marker}{vehicle_data['name']}", color=color)
+        draw_text(300, y_pos, f"Speed: {vehicle_data['speed_mult']:.1f}x")
+        draw_text(450, y_pos, f"Handling: {vehicle_data['handling']:.1f}x")
+        draw_text(600, y_pos, f"Special: {vehicle_data['special'].title()}")
+        y_pos -= 30
+    
+    draw_text(50, y_pos - 20, "LOCKED VEHICLES:", color=(0.5, 0.5, 0.5))
+    y_pos -= 50
+    for vehicle_key, vehicle_data in vehicle_types.items():
+        if vehicle_key not in unlocked_vehicles:
+            draw_text(70, y_pos, f"{vehicle_data['name']} - Complete achievements to unlock", color=(0.5, 0.5, 0.5))
+            y_pos -= 25
+
+    draw_text(50, 150, "Controls:", color=(0.8, 0.8, 0.8))
+    draw_text(50, 120, "1 - Select Vehicle  |  2 - Change Color  |  W/S - Navigate  |  B - Back to Menu")
+    draw_text(50, 90, f"Current Color: RGB({vehicle_colors[selected_color_index][0]:.1f}, {vehicle_colors[selected_color_index][1]:.1f}, {vehicle_colors[selected_color_index][2]:.1f})")
+
+def draw_achievements():
+    draw_text(350, 750, "ACHIEVEMENTS", font=GLUT_BITMAP_TIMES_ROMAN_24)
+    
+    y_pos = 680
+    for achievement_id, achievement_data in achievements.items():
+        status = "✓" if achievement_data["unlocked"] else "✗"
+        color = (0.0, 1.0, 0.0) if achievement_data["unlocked"] else (0.8, 0.8, 0.8)
+        
+        draw_text(50, y_pos, f"{status} {achievement_data['name']}", color=color)
+        draw_text(350, y_pos, achievement_data["desc"], color=color)
+        draw_text(700, y_pos, f"Reward: {achievement_data['reward'].title()}", color=color)
+        y_pos -= 40
+
+    draw_text(50, 350, "Progress:", color=(1.0, 1.0, 0.0))
+    draw_text(50, 320, f"Total Coins Collected: {total_coins}/100")
+    draw_text(50, 290, f"Super Jumps Used: {achievement_counters['super_jumps']}/10")
+    draw_text(50, 260, f"Total Distance: {int(achievement_counters['total_distance']/10)}m/2000m")
+    draw_text(50, 230, f"Current Distance: {int(player_z/10)}m/500m")
+    
+    draw_text(50, 180, "Statistics:", color=(1.0, 1.0, 0.0))
+    draw_text(50, 150, f"Games Played: {stats['games_played']}")
+    draw_text(50, 120, f"Best Score: {stats['best_score']}")
+    draw_text(50, 90, f"Best Distance: {int(stats['best_distance']/10)}m")
+    draw_text(50, 60, f"Total Crashes: {stats['total_crashes']}")
+    
+    draw_text(400, 30, "Press B to return to menu", color=(0.8, 0.8, 0.8))
+
+def draw_game_over():
+    draw_text(400, 500, "GAME OVER", font=GLUT_BITMAP_TIMES_ROMAN_24, color=(1.0, 0.0, 0.0))
+    draw_text(350, 450, f"Final Score: {int(score)}")
+    draw_text(340, 420, f"Distance: {int(player_z/10)}m")
+    draw_text(350, 390, f"Coins Collected: {coins}")
+    draw_text(320, 360, f"Vehicle Used: {current_vehicle['name']}")
+    
+    if score == stats["best_score"]:
+        draw_text(350, 320, "NEW HIGH SCORE!", color=(0.0, 1.0, 0.0))
+    
+    draw_text(280, 250, "R - Restart Game  |  B - Back to Menu")
+
+# -----------------
+# Rendering Pipeline
+# -----------------
+def draw_game_scene():
+    # Set up dynamic lighting based on time and weather
+    ambient, diffuse, clear_color = get_lighting_for_time()
+    
+    glClearColor(clear_color[0], clear_color[1], clear_color[2], 1.0)
+    
+    # Basic lighting setup 
+    light_pos = [0.0, 500.0, 500.0, 1.0]
+    glLightfv(GL_LIGHT0, GL_POSITION, light_pos)
+    glLightfv(GL_LIGHT0, GL_DIFFUSE, diffuse)
+    glLightfv(GL_LIGHT0, GL_AMBIENT, ambient)
+
+    # Draw environment
+    draw_enhanced_environment()
+    draw_road_with_enhancements()
+
+    # Draw interactive elements
+    draw_animals()
+    draw_obstacles()
+    draw_collectibles()
+    draw_particle_effects()
+    draw_weather_effects()
+
+    # Draw player vehicle (only in third person)
+    if not first_person_view:
+        glPushMatrix()
+        glTranslatef(player_x, player_y, player_z)
+        
+        # Apply invincibility effect
+        if invincible_timer > 0 and (invincible_timer // 5) % 2:
+            pass  # Skip drawing every few frames for blinking effect
+        else:
+            current_color = vehicle_colors[selected_color_index]
+            glow_effect = (flash_timer > 0 or invincible_timer > 0)
+            draw_vehicle(selected_vehicle, current_color, glow=glow_effect)
+        
+        glPopMatrix()
+
+    draw_enhanced_hud()
+
+# -----------------
+# GLUT Functions 
+# -----------------
+def idle():
+    global last_time_ms, life_icon_angle, flash_timer, shake_timer, shake_offset_x, shake_offset_y
+    
+    now = glutGet(GLUT_ELAPSED_TIME)
+    if last_time_ms == 0:
+        last_time_ms = now
+    dt_ms = now - last_time_ms
+    last_time_ms = now
+    dt = max(0.001, dt_ms / 1000.0)
+
+    if state == STATE_PLAYING:
+        update_game(dt)
+
+    life_icon_angle += (speed if state == STATE_PLAYING else 1.0) * 60 * dt
+    if life_icon_angle > 360:
+        life_icon_angle -= 360
+
+    if flash_timer > 0:
+        flash_timer -= 1
+
+    if shake_timer > 0:
+        shake_timer -= 1
+        shake_offset_x = random.uniform(-1.0, 1.0) * shake_intensity
+        shake_offset_y = random.uniform(-1.0, 1.0) * shake_intensity
+    else:
+        shake_offset_x = 0.0
+        shake_offset_y = 0.0
+
+    glutPostRedisplay()
+
+def showScreen():
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+    glLoadIdentity()
+    glViewport(0, 0, 1000, 800)
+
+    if state == STATE_MENU:
+        setupCamera()
+        draw_main_menu()
+    elif state == STATE_GARAGE:
+        setupCamera()
+        draw_garage()
+    elif state == STATE_ACHIEVEMENTS:
+        setupCamera()
+        draw_achievements()
+    elif state == STATE_PLAYING:
+        setupCamera()
+        draw_game_scene()
+    elif state == STATE_GAMEOVER:
+        setupCamera()
+        draw_game_scene()
+        draw_game_over()
+
+    glutSwapBuffers()
+
+# -----------------
+# Initialization 
+# -----------------
+def init_gl():
+    print("=== 3D CAR OBSTACLE DODGE ===")
+    
+    glEnable(GL_DEPTH_TEST)
+    glShadeModel(GL_SMOOTH)
+    glClearColor(0.5, 0.7, 0.9, 1.0)
+
+def main():
+    glutInit()
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH)
+    glutInitWindowSize(1000, 800)
+    glutInitWindowPosition(50, 50)
+    glutCreateWindow(b"3D Car Obstacle Dodge ")
+
+    init_gl()
+
+    glutDisplayFunc(showScreen)
+    glutKeyboardFunc(keyboardListener)
+    glutSpecialFunc(specialKeyListener)
+    glutMouseFunc(mouseListener)
+    glutIdleFunc(idle)
+
+    print("=== CONTROLS ===")
+    print("MENU: 1=Play, 2=Garage, 3=Achievements, Q=Quit")
+    print("GAME: A/D=Steer, W/S=Speed, SPACE=Jump, V=First Person, C=Cheat, R=Restart")
+    print("GARAGE: 1=Select Vehicle, 2=Change Color, W/S=Navigate, B=Back")
+    print("CAMERA: Arrow Keys (Third Person Only)")
+    print("GAMEOVER: R=Restart, B=Back to Menu")
+    print("")
+    print("=== VEHICLE SPECIAL ABILITIES ===")
+    print("Sport Car: High Speed")
+    print("Truck: Can Smash Destructible Obstacles")
+    print("Motorcycle: Super Agile & Fast")
+    print("Rally Car: Better Jumping")
+    print("Luxury: Comfortable Ride")
+    print("")
+    print("Starting game... Have fun!")
+
+    glutMainLoop()
+
+if __name__ == "__main__":
+    main()
