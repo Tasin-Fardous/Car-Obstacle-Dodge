@@ -577,3 +577,510 @@ def check_collectible_collision():
                 
             elif c["type"] == POWERUP_LIFE:
                 lives = min(lives + 1, 10)
+
+
+                # Enhanced Obstacles System
+# -----------------
+def spawn_obstacle():
+    global obstacles, spawn_cooldown
+    obstacle_types = ["box", "sphere", "cone", "barrier"]
+    
+    occupied_lanes = set()
+    for c in collectibles:
+        if abs(c["z"] - (player_z + spawn_distance_ahead)) < 200:
+            for i, lane in enumerate(lanes_x):
+                if abs(c["x"] - lane) < 50:
+                    occupied_lanes.add(i)
+    
+    available_lanes = [i for i in range(len(lanes_x)) if i not in occupied_lanes]
+    if not available_lanes:
+        available_lanes = list(range(len(lanes_x)))
+    
+    lane_idx = choice(available_lanes)
+    lane_x = lanes_x[lane_idx]
+    
+    obstacle_type = choice(obstacle_types)
+    size = randint(40, 80)
+    z = player_z + spawn_distance_ahead + randint(100, 500)
+    
+    destructible = obstacle_type in ["box", "barrier"] and random.random() < 0.3
+    
+    obstacles.append({
+        "x": lane_x,
+        "z": float(z),
+        "type": obstacle_type,
+        "size": float(size),
+        "destructible": destructible,
+        "rotation": 0.0
+    })
+    spawn_cooldown = spawn_interval
+
+def update_obstacles(dt):
+    global obstacles
+    obstacles = [o for o in obstacles if o["z"] > player_z - 400.0]
+    
+    for o in obstacles:
+        o["rotation"] += 30.0 * dt
+
+def draw_obstacles():
+    for o in obstacles:
+        glPushMatrix()
+        glTranslatef(o["x"], 0, o["z"])
+        glRotatef(o["rotation"], 0, 1, 0)
+        
+        if o.get("destructible", False):
+            glColor3f(0.6, 0.4, 0.2)
+        else:
+            if o["type"] == "box":
+                glColor3f(0.8, 0.4, 0.2)
+            elif o["type"] == "sphere":
+                glColor3f(0.6, 0.6, 0.7)
+            elif o["type"] == "cone":
+                glColor3f(0.9, 0.5, 0.1)
+            else:  
+                glColor3f(0.7, 0.1, 0.1)
+        
+        if o["type"] == "box":
+            draw_cuboid(o["size"], o["size"], o["size"])
+        elif o["type"] == "sphere":
+            draw_sphere(o["size"] * 0.6, 16, 16)
+        elif o["type"] == "cone":
+            draw_cone(o["size"] * 0.5, o["size"], 12)
+        else:  
+            draw_cuboid(o["size"] * 1.5, o["size"] * 0.3, o["size"] * 0.5)
+        
+        glPopMatrix()
+
+def check_collision_bounds(bounds1, bounds2):
+    x1, y1, z1, w1, h1, l1 = bounds1
+    x2, y2, z2, w2, h2, l2 = bounds2
+    
+    return (abs(x1 - x2) * 2 < (w1 + w2) and
+            abs(y1 - y2) * 2 < (h1 + h2) and
+            abs(z1 - z2) * 2 < (l1 + l2))
+
+def check_collisions():
+    global lives, state, flash_timer, shake_timer, shake_intensity, slow_timer, pre_slow_speed
+    
+    if invincible_timer > 0:
+        return
+    
+    ax, ay, az = player_x, player_y, player_z
+    aw, ah, al = player_width * current_vehicle["size_mult"], player_height, player_length * current_vehicle["size_mult"]
+
+    for o in list(obstacles):
+        if o["type"] == "box" or o["type"] == "barrier":
+            bw = bh = bl = o["size"]
+        elif o["type"] == "cone":
+            bw = bh = bl = o["size"]
+        else:  # sphere
+            r = o["size"] * 0.6
+            bw = bh = bl = r * 2
+        
+        bx, by, bz = o["x"], 0.0, o["z"]
+
+        if check_collision_bounds((ax, ay, az, aw, ah, al), (bx, by, bz, bw, bh, bl)):
+            if current_vehicle["special"] == "smash" and o.get("destructible", False):
+                try:
+                    obstacles.remove(o)
+                    score += 50
+                    create_particle_effect(o["x"], 0, o["z"], "explosion")
+                except ValueError:
+                    pass
+                continue
+            
+            lives -= 1
+            stats["total_crashes"] += 1
+            try:
+                obstacles.remove(o)
+            except ValueError:
+                pass
+
+            trigger_hit_feedback()
+            pre_slow_speed = max(min_speed, speed)
+            globals()['speed'] = max(min_speed, pre_slow_speed * 0.5)
+            slow_timer = 120
+
+            if lives <= 0:
+                end_game()
+            break
+
+# -----------------
+# Weather & Time System 
+# -----------------
+def update_weather_and_time(dt):
+    global time_of_day, weather_timer, weather_type, weather_intensity, rain_drops, snow_flakes
+    
+    time_of_day += dt * 0.001
+    if time_of_day > 1.0:
+        time_of_day = 0.0
+    
+    weather_timer += dt
+    if weather_timer > 30.0:
+        weather_timer = 0.0
+        weather_type = choice(["clear", "clear", "rain", "fog", "snow"])
+        weather_intensity = uniform(0.3, 1.0) if weather_type != "clear" else 0.0
+    
+    if weather_type == "rain":
+        if len(rain_drops) < 100:
+            for _ in range(10):
+                rain_drops.append({
+                    "x": uniform(player_x - 300, player_x + 300),
+                    "y": uniform(50, 200),
+                    "z": uniform(player_z - 100, player_z + 500),
+                    "speed": uniform(200, 400)
+                })
+        
+        for drop in rain_drops[:]:
+            drop["y"] -= drop["speed"] * dt
+            if drop["y"] < -30:
+                rain_drops.remove(drop)
+    
+    elif weather_type == "snow":
+        if len(snow_flakes) < 150:
+            for _ in range(15):
+                snow_flakes.append({
+                    "x": uniform(player_x - 400, player_x + 400),
+                    "y": uniform(50, 250),
+                    "z": uniform(player_z - 200, player_z + 600),
+                    "speed": uniform(30, 80),
+                    "drift": uniform(-20, 20)
+                })
+        
+        for flake in snow_flakes[:]:
+            flake["y"] -= flake["speed"] * dt
+            flake["x"] += flake["drift"] * dt
+            if flake["y"] < -30:
+                snow_flakes.remove(flake)
+
+def draw_weather_effects():
+    if weather_type == "rain":
+        glColor3f(0.6, 0.8, 1.0)
+        glBegin(GL_LINES)
+        for drop in rain_drops:
+            glVertex3f(drop["x"], drop["y"], drop["z"])
+            glVertex3f(drop["x"], drop["y"] - 20, drop["z"])
+        glEnd()
+    
+    elif weather_type == "snow":
+        glColor3f(1.0, 1.0, 1.0)
+        glBegin(GL_POINTS)
+        for flake in snow_flakes:
+            glVertex3f(flake["x"], flake["y"], flake["z"])
+        glEnd()
+
+def get_lighting_for_time():
+    if time_of_day < 0.3:
+        ambient = [0.1, 0.1, 0.2, 1.0]
+        diffuse = [0.3, 0.3, 0.5, 1.0]
+        clear_color = (0.02, 0.02, 0.08)
+    elif time_of_day < 0.4:
+        ambient = [0.3, 0.2, 0.1, 1.0]
+        diffuse = [0.8, 0.6, 0.4, 1.0]
+        clear_color = (0.4, 0.2, 0.1)
+    elif time_of_day < 0.7:
+        ambient = [0.4, 0.4, 0.4, 1.0]
+        diffuse = [0.9, 0.9, 0.8, 1.0]
+        clear_color = (0.5, 0.7, 0.9)
+    elif time_of_day < 0.8:
+        ambient = [0.3, 0.2, 0.1, 1.0]
+        diffuse = [0.8, 0.5, 0.3, 1.0]
+        clear_color = (0.6, 0.3, 0.1)
+    else:
+        ambient = [0.1, 0.1, 0.2, 1.0]
+        diffuse = [0.3, 0.3, 0.5, 1.0]
+        clear_color = (0.02, 0.02, 0.08)
+    
+    if weather_type == "fog":
+        clear_color = (0.8, 0.8, 0.8)
+        ambient = [a * 1.5 for a in ambient]
+    elif weather_type == "rain":
+        clear_color = tuple(c * 0.7 for c in clear_color)
+    
+    return ambient, diffuse, clear_color
+
+# -----------------
+# Particle Effects System 
+# -----------------
+def create_particle_effect(x, y, z, effect_type):
+    global particle_effects
+    
+    if effect_type == "explosion":
+        for _ in range(20):
+            particle_effects.append({
+                "x": x + uniform(-20, 20),
+                "y": y + uniform(10, 40),
+                "z": z + uniform(-20, 20),
+                "vx": uniform(-50, 50),
+                "vy": uniform(20, 80),
+                "vz": uniform(-50, 50),
+                "life": 60,
+                "max_life": 60,
+                "type": "spark"
+            })
+
+def update_particle_effects(dt):
+    global particle_effects
+    
+    for particle in particle_effects[:]:
+        particle["x"] += particle["vx"] * dt
+        particle["y"] += particle["vy"] * dt
+        particle["z"] += particle["vz"] * dt
+        particle["vy"] -= 100 * dt
+        particle["life"] -= 1
+        
+        if particle["life"] <= 0:
+            particle_effects.remove(particle)
+
+def draw_particle_effects():
+    for particle in particle_effects:
+        alpha = particle["life"] / particle["max_life"]
+        glColor3f(1.0, 0.5 + alpha * 0.5, 0.0)
+        
+        glPushMatrix()
+        glTranslatef(particle["x"], particle["y"], particle["z"])
+        draw_sphere(2, 6, 6)
+        glPopMatrix()
+
+# -----------------
+# Animals & Interactive Environment 
+# -----------------
+def spawn_animal():
+    global animals
+    
+    if random.random() < 0.02:
+        animal_types = ["deer", "rabbit"]
+        animal_type = choice(animal_types)
+        
+        start_side = choice([-1, 1])
+        start_x = start_side * (road_half_width + 200)
+        target_x = -start_side * (road_half_width + 200)
+        
+        z = player_z + spawn_distance_ahead + randint(300, 800)
+        
+        animals.append({
+            "type": animal_type,
+            "x": start_x,
+            "y": -15,
+            "z": z,
+            "target_x": target_x,
+            "speed": uniform(80, 150),
+            "size": 25 if animal_type == "deer" else 15
+        })
+
+def update_animals(dt):
+    global animals
+    
+    for animal in animals[:]:
+        if animal["x"] < animal["target_x"]:
+            animal["x"] += animal["speed"] * dt
+        else:
+            animal["x"] -= animal["speed"] * dt
+        
+        if (abs(animal["x"] - animal["target_x"]) < 20 or 
+            animal["z"] < player_z - 500):
+            animals.remove(animal)
+
+def draw_animals():
+    for animal in animals:
+        glPushMatrix()
+        glTranslatef(animal["x"], animal["y"], animal["z"])
+        
+        if animal["type"] == "deer":
+            glColor3f(0.6, 0.4, 0.2)
+            draw_sphere(animal["size"], 12, 12)
+            # Antlers
+            glPushMatrix()
+            glTranslatef(0, animal["size"], 0)
+            glColor3f(0.8, 0.7, 0.5)
+            draw_cuboid(3, 15, 3)
+            glPopMatrix()
+        else:  # rabbit
+            glColor3f(0.8, 0.8, 0.8)
+            draw_sphere(animal["size"], 8, 8)
+            # Ears
+            glPushMatrix()
+            glTranslatef(-5, animal["size"], 0)
+            draw_cuboid(2, 8, 2)
+            glTranslatef(10, 0, 0)
+            draw_cuboid(2, 8, 2)
+            glPopMatrix()
+        
+        glPopMatrix()
+
+def check_animal_collision():
+    global lives, score
+    
+    if invincible_timer > 0:
+        return
+    
+    for animal in animals[:]:
+        distance = math.sqrt((player_x - animal["x"])**2 + (player_z - animal["z"])**2)
+        if distance < (player_width/2 + animal["size"]):
+            animals.remove(animal)
+            lives -= 1
+            score -= 200
+            trigger_hit_feedback()
+            if lives <= 0:
+                end_game()
+            break
+
+# -----------------
+# Achievements System
+# -----------------
+def check_achievement(achievement_id):
+    global achievement_notification, notification_timer, unlocked_vehicles
+    
+    achievement = achievements[achievement_id]
+    if achievement["unlocked"]:
+        return
+    
+    unlock = False
+    
+    if achievement_id == "first_coin" and total_coins >= 1:
+        unlock = True
+    elif achievement_id == "collector" and total_coins >= 100:
+        unlock = True
+    elif achievement_id == "speed_demon" and speed >= max_speed:
+        unlock = True
+    elif achievement_id == "survivor" and player_z >= 5000:
+        unlock = True
+    elif achievement_id == "jumper" and achievement_counters["super_jumps"] >= 10:
+        unlock = True
+    elif achievement_id == "distance_master" and achievement_counters["total_distance"] >= 20000:
+        unlock = True
+    
+    if unlock:
+        achievement["unlocked"] = True
+        achievement_notification = f"Achievement Unlocked: {achievement['name']}!"
+        notification_timer = 300
+        
+        reward = achievement["reward"]
+        if reward in vehicle_types and reward not in unlocked_vehicles:
+            unlocked_vehicles.append(reward)
+        elif reward == "color":
+            pass
+
+# -----------------
+# Enhanced Environment Rendering 
+# -----------------
+def draw_realistic_grass_texture(x_start, x_end, z_start, z_end, base_y=-25):
+    """Draw realistic grass using GL_QUADS"""
+    random.seed(int(x_start * 17 + z_start * 23) % 1000)
+    
+    grass_colors = [
+        (0.15, 0.6, 0.2),
+        (0.25, 0.7, 0.25),
+        (0.3, 0.8, 0.3),
+        (0.2, 0.65, 0.22),
+    ]
+    
+    segment_size = 50.0
+    x = x_start
+    while x < x_end:
+        z = z_start
+        while z < z_end:
+            height_variation = random.uniform(-3, 2)
+            grass_y = base_y + height_variation
+            
+            color = random.choice(grass_colors)
+            glColor3f(color[0], color[1], color[2])
+            
+            patch_size = segment_size + random.uniform(-10, 10)
+            glBegin(GL_QUADS)
+            glVertex3f(x, grass_y, z)
+            glVertex3f(x + patch_size, grass_y, z)
+            glVertex3f(x + patch_size, grass_y, z + patch_size)
+            glVertex3f(x, grass_y, z + patch_size)
+            glEnd()
+            
+            z += patch_size * 0.8
+        x += segment_size * 0.8
+
+def draw_enhanced_environment():
+    field_width = 1200.0
+    road_edge = road_half_width + 30.0
+    
+    draw_realistic_grass_texture(-road_edge - field_width, -road_edge, 
+                                player_z - 1200, player_z + 3500)
+    draw_realistic_grass_texture(road_edge, road_edge + field_width,
+                                player_z - 1200, player_z + 3500)
+
+def draw_road_with_enhancements():
+    # Road surface
+    glColor3f(0.15, 0.15, 0.15)
+    glBegin(GL_QUADS)
+    glVertex3f(-road_half_width, -22, player_z - 1000)
+    glVertex3f( road_half_width, -22, player_z - 1000)
+    glVertex3f( road_half_width, -22, player_z + 3000)
+    glVertex3f(-road_half_width, -22, player_z + 3000)
+    glEnd()
+
+    # Lane markers using quads instead of lines
+    glColor3f(0.9, 0.9, 0.1)
+    for lane in [-lane_width/2, lane_width/2]:
+        z = int((player_z - 1000) // 80) * 80
+        while z < player_z + 3000:
+            glBegin(GL_QUADS)
+            glVertex3f(lane - 2, -20, z)
+            glVertex3f(lane + 2, -20, z)
+            glVertex3f(lane + 2, -20, z + 40)
+            glVertex3f(lane - 2, -20, z + 40)
+            glEnd()
+            z += 80
+
+    # Road edges using quads instead of lines
+    glColor3f(0.9, 0.9, 0.9)
+    for x in [-road_half_width, road_half_width]:
+        z = player_z - 1000
+        while z < player_z + 3000:
+            glBegin(GL_QUADS)
+            glVertex3f(x - 1.5, -20, z)
+            glVertex3f(x + 1.5, -20, z)
+            glVertex3f(x + 1.5, -20, z + 100)
+            glVertex3f(x - 1.5, -20, z + 100)
+            glEnd()
+            z += 120
+
+# -----------------
+# Enhanced Camera System 
+# -----------------
+def setupCamera():
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    
+    dynamic_fov = fovY + (speed - base_speed) * 10
+    dynamic_fov = max(90, min(140, dynamic_fov))
+    
+    gluPerspective(dynamic_fov, 1.25, 0.1, 6000)
+    glMatrixMode(GL_MODELVIEW)
+    glLoadIdentity()
+
+    if first_person_view:
+        fp_height = player_y + 25.0
+        look_ahead_distance = 200.0 + speed * 50.0
+        
+        eye_x = player_x + shake_offset_x * 0.5
+        eye_y = fp_height + shake_offset_y * 0.5
+        eye_z = player_z + 30.0
+        
+        look_x = player_x
+        look_y = player_y + 10.0
+        look_z = player_z + look_ahead_distance
+        
+        gluLookAt(eye_x, eye_y, eye_z,
+                  look_x, look_y, look_z,
+                  0, 1, 0)
+    else:
+        dynamic_distance = cam_distance + speed * 30.0
+        yaw_rad = math.radians(cam_yaw)
+        cx = player_x - math.sin(yaw_rad) * dynamic_distance
+        cz = player_z - math.cos(yaw_rad) * dynamic_distance
+        cy = cam_height + player_y * 0.5 + speed * 20.0
+
+        cx += shake_offset_x
+        cy += shake_offset_y
+
+        gluLookAt(cx, cy, cz,
+                  player_x, player_y + 10.0, player_z + 120.0,
+                  0, 1, 0)
